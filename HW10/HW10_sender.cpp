@@ -1,4 +1,5 @@
 #define BOOST_DATE_TIME_NO_LIB
+#define BOOST_USE_WINDOWS_H
 
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +16,9 @@
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/interprocess/sync/interprocess_condition.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/thread/mutex.hpp>
+#include <boost/bind.hpp>
 
 using segment_manager_t = boost::interprocess::managed_shared_memory::segment_manager;
 using char_allocator_t = boost::interprocess::allocator < char, segment_manager_t >;
@@ -28,20 +32,28 @@ using mx = boost::interprocess::interprocess_mutex;
 using cn = boost::interprocess::interprocess_condition;
 
 /* myMap <id, msg> */
-void waiter(map_t* map, id_t id, size_t& keptSize, mx* mutex, cn* condition) {
+void waiter(map_t* map, id_t id, int& keptId, mx* mutex, cn* condition) {
 	while (true) {
 		{
-			std::lock_guard lock(*mutex);
+			boost::interprocess::scoped_lock lock{ *mutex };
+			condition->wait(lock);
 
-			if (map->rbegin()->first != keptSize) {
-				std::cout << map->at(id) << std::endl;
+			if (map->rbegin()->first != keptId) {
+				std::cout << map->rbegin()->second << std::endl;
+				keptId = map->rbegin()->first;
 			}
 		}
 	}
 }
 
+//#define CLEAN_SHARED
+
 int main() {
 	const std::string shared_memory_name = "managed_shared_memory";
+#ifdef CLEAN_SHARED
+	boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
+	return 0;
+#endif // CLEAN_SHARED
 
 	/* creating */
 	boost::interprocess::managed_shared_memory shared_memory(boost::interprocess::open_or_create, shared_memory_name.c_str(), 1024);
@@ -54,27 +66,31 @@ int main() {
 
 	/* working */
 	std::string msg;
-	size_t keptSize = -1;
-	int keptId = 0;
-	std::thread waiter(waiter, map, keptId, std::ref(keptSize), mutex, condition);
-	while (std::getline(std::cin, msg)) {
-		if (msg == "/exit/") {
-			condition->notify_all();
-			waiter.join();
-			break;
-		}
-		else {
-			if (!map->empty()) {
-				keptSize = map->size();
-			}
-			std::unique_lock lock(*mutex);
-			string_t bMsg(msg.data(), shared_memory.get_segment_manager());
-			map->insert(std::pair<id_t, string_t>(++keptSize, bMsg));
-			lock.unlock();
-			condition->notify_all();
-		}
+	int keptId = -1;
+	if (!map->empty()) {
+		keptId = map->size();
 	}
 
+	try {
+		std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition);
+		while (std::getline(std::cin, msg)) {
+			if (msg == "/exit/") {
+				condition->notify_all();
+				waiter.join();
+				break;
+			}
+			else {
+				std::unique_lock lock(*mutex);
+				string_t bMsg(msg.data(), shared_memory.get_segment_manager());
+				map->insert(std::pair<id_t, string_t>(++keptId, bMsg));
+				lock.unlock();
+				condition->notify_all();
+			}
+		}
+	}
+	catch (...) {
+		std::cout << "EXCEPTION!" << std::endl;
+	}
 	boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
 	return EXIT_SUCCESS;
 }
