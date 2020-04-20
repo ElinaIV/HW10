@@ -35,7 +35,6 @@ void waiter(map_t* map, id_t id, size_t& keptSize, mx* mutex, cn* condition) {
 
 			if (map->rbegin()->first != keptSize) {
 				std::cout << map->at(id) << std::endl;
-				++keptSize;
 			}
 		}
 	}
@@ -66,7 +65,7 @@ int main() {
 		}
 		else {
 			if (!map->empty()) {
-				keptSize = map->size;
+				keptSize = map->size();
 			}
 			std::unique_lock lock(*mutex);
 			string_t bMsg(msg.data(), shared_memory.get_segment_manager());
