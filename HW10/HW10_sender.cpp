@@ -19,6 +19,8 @@
 #include <boost/thread/thread.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/bind.hpp>
+#include <atomic>
+#include <fstream>
 
 using segment_manager_t = boost::interprocess::managed_shared_memory::segment_manager;
 using char_allocator_t = boost::interprocess::allocator < char, segment_manager_t >;
@@ -32,20 +34,26 @@ using mx = boost::interprocess::interprocess_mutex;
 using cn = boost::interprocess::interprocess_condition;
 
 /* myMap <id, msg> */
-void waiter(map_t* map, id_t id, int& keptId, mx* mutex, cn* condition) {
+void waiter(map_t* map, id_t id, int& keptId, mx* mutex, cn* condition, bool& exitCondition) {
 	while (true) {
 		{
 			boost::interprocess::scoped_lock lock{ *mutex };
 			condition->wait(lock);
 
-			if (map->rbegin()->first != keptId) {
-				std::cout << map->rbegin()->second << std::endl;
+			if (exitCondition) {
+				break;
+			}
+
+			id_t last = map->rbegin()->first;
+			if (last != keptId) {
+				std::cout << map->at(last) << std::endl;
 				keptId = map->rbegin()->first;
 			}
 		}
 	}
 }
 
+//При аварийном завершении программы - раскоментить дефайн, запустить программу, закоментить обратно
 //#define CLEAN_SHARED
 
 int main() {
@@ -63,6 +71,8 @@ int main() {
 	auto mutex = shared_memory.find_or_construct<mx>(mutex_name.c_str())();
 	auto condition = shared_memory.find_or_construct<cn>(condition_name.c_str())();
 	auto map = shared_memory.find_or_construct <map_t>("map")(std::less<id_t>(), alloc);
+	auto exitCondition = shared_memory.find_or_construct < bool >("exitCondition")(false);
+	std::ofstream logFile("messageLog.txt", std::ios::app);
 
 	/* working */
 	std::string msg;
@@ -70,10 +80,10 @@ int main() {
 	if (!map->empty()) {
 		keptId = map->size();
 	}
-
-	std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition);
+	std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition, std::ref(*exitCondition));
 	while (std::getline(std::cin, msg)) {
 		if (msg == "/exit/") {
+			*exitCondition = true;
 			condition->notify_all();
 			waiter.join();
 			break;
@@ -81,12 +91,13 @@ int main() {
 		else {
 			std::unique_lock lock(*mutex);
 			string_t bMsg(msg.data(), shared_memory.get_segment_manager());
+			map->erase(keptId);
+			logFile << msg << std::endl;
 			map->insert(std::pair<id_t, string_t>(++keptId, bMsg));
 			lock.unlock();
 			condition->notify_all();
 		}
 	}
-
 	boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
 	return EXIT_SUCCESS;
 }
