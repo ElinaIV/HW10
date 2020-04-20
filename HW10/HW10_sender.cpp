@@ -71,26 +71,22 @@ int main() {
 		keptId = map->size();
 	}
 
-	try {
-		std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition);
-		while (std::getline(std::cin, msg)) {
-			if (msg == "/exit/") {
-				condition->notify_all();
-				waiter.join();
-				break;
-			}
-			else {
-				std::unique_lock lock(*mutex);
-				string_t bMsg(msg.data(), shared_memory.get_segment_manager());
-				map->insert(std::pair<id_t, string_t>(++keptId, bMsg));
-				lock.unlock();
-				condition->notify_all();
-			}
+	std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition);
+	while (std::getline(std::cin, msg)) {
+		if (msg == "/exit/") {
+			condition->notify_all();
+			waiter.join();
+			break;
+		}
+		else {
+			std::unique_lock lock(*mutex);
+			string_t bMsg(msg.data(), shared_memory.get_segment_manager());
+			map->insert(std::pair<id_t, string_t>(++keptId, bMsg));
+			lock.unlock();
+			condition->notify_all();
 		}
 	}
-	catch (...) {
-		std::cout << "EXCEPTION!" << std::endl;
-	}
+
 	boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
 	return EXIT_SUCCESS;
 }
