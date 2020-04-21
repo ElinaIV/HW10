@@ -34,7 +34,7 @@ using mx = boost::interprocess::interprocess_mutex;
 using cn = boost::interprocess::interprocess_condition;
 
 /* myMap <id, msg> */
-void waiter(map_t* map, id_t id, int& keptId, mx* mutex, cn* condition, bool& exitCondition) {
+void waiter(map_t* map, id_t id, int& keptId, mx* mutex, cn* condition, std::atomic<bool>& exitCondition) {
 	while (true) {
 		{
 			boost::interprocess::scoped_lock lock{ *mutex };
@@ -71,21 +71,25 @@ int main() {
 	auto mutex = shared_memory.find_or_construct<mx>(mutex_name.c_str())();
 	auto condition = shared_memory.find_or_construct<cn>(condition_name.c_str())();
 	auto map = shared_memory.find_or_construct <map_t>("map")(std::less<id_t>(), alloc);
-	auto exitCondition = shared_memory.find_or_construct < bool >("exitCondition")(false);
+	auto clientsOnline = shared_memory.find_or_construct < std::atomic<int> >("clientsOnline")(0);
 	std::ofstream logFile("messageLog.txt", std::ios::app);
 
 	/* working */
 	std::string msg;
 	int keptId = -1;
+	std::atomic<bool> exitCondition = false;
 	if (!map->empty()) {
 		keptId = map->size();
 	}
-	std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition, std::ref(*exitCondition));
+	(*clientsOnline)++;
+	std::cout << "Clients: " << *clientsOnline << std::endl;
+	std::thread waiter(waiter, map, keptId, std::ref(keptId), mutex, condition, std::ref(exitCondition));
 	while (std::getline(std::cin, msg)) {
 		if (msg == "/exit/") {
-			*exitCondition = true;
+			exitCondition = true;
 			condition->notify_all();
 			waiter.join();
+			(*clientsOnline)--;
 			break;
 		}
 		else {
@@ -98,7 +102,10 @@ int main() {
 			condition->notify_all();
 		}
 	}
-	boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
+	if (*clientsOnline == 0) {
+		std::cout << "Removed shared memory" << std::endl;
+		boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
+	}
 	return EXIT_SUCCESS;
 }
 
